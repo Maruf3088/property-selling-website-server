@@ -194,7 +194,7 @@ app.delete(
 // ------------- agencies API's  ------------------
 
 // GET all agencies
-app.get("/agencies", async (req, res) => {
+app.get("/agencies",verifyToken, async (req, res) => {
   try {
     const { agencyCollection } = getCollections();
     const agencies = await agencyCollection.find({}).toArray();
@@ -208,7 +208,7 @@ app.get("/agencies", async (req, res) => {
 });
 
 // GET single agency by ID
-app.get("/agencies/:id", async (req, res) => {
+app.get("/agencies/:id",verifyToken, async (req, res) => {
   try {
     const { agencyCollection } = getCollections();
     const id = req.params.id;
@@ -236,7 +236,7 @@ app.get("/agencies/:id", async (req, res) => {
   }
 });
 
-app.post("/agencies", async (req, res) => {
+app.post("/agencies", verifyToken, async (req, res) => {
   try {
     const agencyData = req.body;
     const email = agencyData.email;
@@ -264,7 +264,7 @@ app.post("/agencies", async (req, res) => {
 // ------------- properties API's  ------------------
 
 // POST property with agency ID
-app.post("/properties", async (req, res) => {
+app.post("/properties",verifyToken, async (req, res) => {
   const propertyData = req.body;
 
   // Convert numeric fields (handle empty strings and NaN)
@@ -352,7 +352,7 @@ app.get("/allProperties", async (req, res) => {
 
     // Build query object
     const query = {
-      isAdminAproved: 'approved', // ✅ Only admin-approved properties
+      isAdminAproved: "approved", // ✅ Only admin-approved properties
     };
 
     // Filter by agencyId if provided
@@ -445,7 +445,7 @@ app.get("/properties/countProperty", async (req, res) => {
     const { propertyCollection } = getCollections();
     const { agencyName, agencyId } = req.query;
 
-    let query = { isAdminAproved: 'approved' };
+    let query = { isAdminAproved: "approved" };
 
     if (agencyId) {
       // Count by agencyId (for direct agency objects)
@@ -474,7 +474,7 @@ app.get("/properties/countProperty", async (req, res) => {
   }
 });
 
-app.get("/allProperties/:id", async (req, res) => {
+app.get("/allProperties/:id", verifyToken, async (req, res) => {
   try {
     const { propertyCollection } = getCollections();
     const id = req.params.id;
@@ -489,7 +489,7 @@ app.get("/allProperties/:id", async (req, res) => {
   }
 });
 
-app.get("/allProperties/user/:email", async (req, res) => {
+app.get("/allProperties/user/:email",verifyToken, async (req, res) => {
   try {
     const { propertyCollection } = getCollections();
     const email = req.params.email;
@@ -507,6 +507,67 @@ app.get("/allProperties/user/:email", async (req, res) => {
   }
 });
 
+app.patch("/allProperties/:id", verifyToken, async (req, res) => {
+  try {
+    const { propertyCollection } = getCollections();
+    const id = req.params.id;
+    const updatedData = req.body;
+
+    // Convert numeric fields if present
+    if (updatedData.details) {
+      if (updatedData.details.beds && updatedData.details.beds !== "") {
+        const bedsNum = parseInt(updatedData.details.beds);
+        updatedData.details.beds = isNaN(bedsNum) ? "" : bedsNum;
+      }
+      if (updatedData.details.baths && updatedData.details.baths !== "") {
+        const bathsNum = parseInt(updatedData.details.baths);
+        updatedData.details.baths = isNaN(bathsNum) ? "" : bathsNum;
+      }
+      if (updatedData.details.belcony && updatedData.details.belcony !== "") {
+        const belconyNum = parseInt(updatedData.details.belcony);
+        updatedData.details.belcony = isNaN(belconyNum) ? "" : belconyNum;
+      }
+      if (updatedData.details.area && updatedData.details.area !== "") {
+        const areaNum = parseFloat(updatedData.details.area);
+        updatedData.details.area = isNaN(areaNum) ? "" : areaNum;
+      }
+    }
+
+    // Ensure price is a number
+    if (updatedData.price) {
+      const priceNum = Number(updatedData.price);
+      if (isNaN(priceNum) || priceNum <= 0) {
+        return res.status(400).send({
+          message: "Invalid price. Please provide a valid positive number.",
+        });
+      }
+      updatedData.price = priceNum;
+    }
+
+    const filter = { _id: new ObjectId(id) };
+    const result = await propertyCollection.updateOne(filter, {
+      $set: updatedData,
+    });
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({
+        message: "Property not found",
+      });
+    }
+
+    res.send({
+      success: true,
+      message: "Property updated successfully",
+      result,
+    });
+  } catch (error) {
+    console.error("Error in PATCH /allProperties/:id:", error);
+    res.status(500).send({
+      message: error.message || "Failed to update property",
+    });
+  }
+});
+
 app.patch(
   "/properties/approve/:id",
   verifyToken,
@@ -517,7 +578,7 @@ app.patch(
       const id = req.params.id;
       const filter = { _id: new ObjectId(id) };
       const updateDoc = {
-        $set: { isAdminAproved: 'approved' },
+        $set: { isAdminAproved: "approved" },
       };
       const result = await propertyCollection.updateOne(filter, updateDoc);
       res.send(result);
@@ -529,23 +590,28 @@ app.patch(
     }
   }
 );
-app.patch('/properties/pending/:id', verifyToken, verifyAdmin, async (req, res) => {
-  try {
-    const { propertyCollection } = getCollections();
-    const id = req.params.id;
-    const filter = { _id: new ObjectId(id) };
-    const updateDoc = {
-      $set: { isAdminAproved: 'pending' },
-    };
-    const result = await propertyCollection.updateOne(filter, updateDoc);
-    res.send(result);
-  } catch (error) {
-    console.error("Error in /properties/pending/:id:", error);
-    res.status(500).send({
-      message: error.message || "Database not connected",
-    });
+app.patch(
+  "/properties/pending/:id",
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
+    try {
+      const { propertyCollection } = getCollections();
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: { isAdminAproved: "pending" },
+      };
+      const result = await propertyCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    } catch (error) {
+      console.error("Error in /properties/pending/:id:", error);
+      res.status(500).send({
+        message: error.message || "Database not connected",
+      });
+    }
   }
-});
+);
 app.patch(
   "/properties/reject/:id",
   verifyToken,
@@ -556,7 +622,7 @@ app.patch(
       const id = req.params.id;
       const filter = { _id: new ObjectId(id) };
       const updateDoc = {
-        $set: { isAdminAproved: 'rejected' },
+        $set: { isAdminAproved: "rejected" },
       };
       const result = await propertyCollection.updateOne(filter, updateDoc);
       res.send(result);
@@ -566,9 +632,14 @@ app.patch(
         message: error.message || "Database not connected",
       });
     }
-  })
+  }
+);
 
-  app.delete("/properties/delete/:id", verifyToken, verifyAdmin, async (req, res) => {
+app.delete(
+  "/properties/delete/:id",
+  verifyToken,
+  verifyAdmin,
+  async (req, res) => {
     try {
       const { propertyCollection } = getCollections();
       const id = req.params.id;
@@ -581,9 +652,10 @@ app.patch(
         message: error.message || "Failed to delete property",
       });
     }
-  })
+  }
+);
 // ------------- favourites API's  ------------------
-app.post("/favourites", async (req, res) => {
+app.post("/favourites", verifyToken, async (req, res) => {
   try {
     const { propertyId, email, propertyName, price, thumbnail } = req.body;
 
@@ -607,7 +679,7 @@ app.post("/favourites", async (req, res) => {
   }
 });
 
-app.delete("/favourites", async (req, res) => {
+app.delete("/favourites", verifyToken, async (req, res) => {
   try {
     const { propertyId, email } = req.body;
 
@@ -623,7 +695,7 @@ app.delete("/favourites", async (req, res) => {
 });
 
 // GET user's favourites
-app.get("/favourites", async (req, res) => {
+app.get("/favourites", verifyToken, async (req, res) => {
   try {
     const email = req.query.email;
     const result = await favouritesCollection.find({ email }).toArray();
