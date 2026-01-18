@@ -37,9 +37,12 @@ const favouritesCollection = client
   .db("propertySellingDB")
   .collection("favourites");
 
+const appointmentsCollection = client
+  .db("propertySellingDB")
+  .collection("appointments");
+
 // ------------- middlewares  ------------------
 const verifyToken = (req, res, next) => {
-  console.log(req.headers.authorization);
   if (!req.headers.authorization) {
     return res.status(401).send({ message: "unauthorized access" });
   }
@@ -168,7 +171,7 @@ app.patch(
         message: error.message || "Failed to remove admin",
       });
     }
-  }
+  },
 );
 
 app.delete(
@@ -188,13 +191,13 @@ app.delete(
         message: error.message || "Failed to delete user",
       });
     }
-  }
+  },
 );
 
 // ------------- agencies API's  ------------------
 
 // GET all agencies
-app.get("/agencies",verifyToken, async (req, res) => {
+app.get("/agencies", verifyToken, async (req, res) => {
   try {
     const { agencyCollection } = getCollections();
     const agencies = await agencyCollection.find({}).toArray();
@@ -208,7 +211,7 @@ app.get("/agencies",verifyToken, async (req, res) => {
 });
 
 // GET single agency by ID
-app.get("/agencies/:id",verifyToken, async (req, res) => {
+app.get("/agencies/:id", verifyToken, async (req, res) => {
   try {
     const { agencyCollection } = getCollections();
     const id = req.params.id;
@@ -261,10 +264,42 @@ app.post("/agencies", verifyToken, async (req, res) => {
   }
 });
 
+// DELETE agency by ID
+app.delete("/agencies/:id", verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const { agencyCollection, propertyCollection } = getCollections();
+    const agencyId = req.params.id;
+
+    // Delete all properties associated with this agency
+    await propertyCollection.deleteMany({ agencyId: agencyId });
+
+    // Delete the agency
+    const result = await agencyCollection.deleteOne({
+      _id: new ObjectId(agencyId),
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).send({
+        message: "Agency not found",
+      });
+    }
+
+    res.send({
+      deletedCount: result.deletedCount,
+      message: "Agency and associated properties deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error in DELETE /agencies/:id:", error);
+    res.status(500).send({
+      message: error.message || "Failed to delete agency",
+    });
+  }
+});
+
 // ------------- properties API's  ------------------
 
 // POST property with agency ID
-app.post("/properties",verifyToken, async (req, res) => {
+app.post("/properties", verifyToken, async (req, res) => {
   const propertyData = req.body;
 
   // Convert numeric fields (handle empty strings and NaN)
@@ -313,7 +348,7 @@ app.post("/properties",verifyToken, async (req, res) => {
   const query = { email: agencyEmail };
   const agency = await agencyCollection.findOne(query);
   if (agency) {
-    propertyData.agencyId = agency._id;
+    propertyData.agencyId = new ObjectId(agency._id);
   } else {
     const agencyData = {
       agencyName: propertyData.agency.agencyName,
@@ -347,24 +382,12 @@ app.get("/allProperties", async (req, res) => {
       isFeatured,
       minArea,
       maxArea,
-      agencyId,
     } = req.query;
 
     // Build query object
     const query = {
       isAdminAproved: "approved", // ✅ Only admin-approved properties
     };
-
-    // Filter by agencyId if provided
-    if (agencyId) {
-      try {
-        query.agencyId = new ObjectId(agencyId);
-      } catch (idError) {
-        return res.status(400).send({
-          message: "Invalid agencyId format",
-        });
-      }
-    }
 
     // Top-level string filters
     if (propertyStatus) query.propertyStatus = propertyStatus;
@@ -402,6 +425,24 @@ app.get("/allProperties", async (req, res) => {
   } catch (error) {
     console.error("Error in /allProperties:", error);
     res.status(500).json({
+      message: error.message || "Database not connected",
+    });
+  }
+});
+
+app.get("/allProperties/agency/:agencyId", verifyToken, async (req, res) => {
+  try {
+    const { propertyCollection } = getCollections();
+    const agencyId = req.params.agencyId;
+    const query = {
+      agencyId: new ObjectId(agencyId),
+      isAdminAproved: "approved",
+    };
+    const result = await propertyCollection.find(query).toArray();
+    res.send(result);
+  } catch (error) {
+    console.error("Error in /allProperties/agency/:agencyId:", error);
+    res.status(500).send({
       message: error.message || "Database not connected",
     });
   }
@@ -474,6 +515,21 @@ app.get("/properties/countProperty", async (req, res) => {
   }
 });
 
+app.get("/properties/countByPropertyId", async (req, res) => {
+  try {
+    const { propertyCollection } = getCollections();
+    const { propertyId } = req.query;
+    const query = { propertyId};
+    const count = await appointmentsCollection.countDocuments(query);
+    res.send({ count });
+  } catch (error) {
+    console.error("Error in /properties/countByPropertyId:", error);
+    res.status(500).send({
+      message: error.message || "Database not connected",
+    });
+  }
+});
+
 app.get("/allProperties/:id", verifyToken, async (req, res) => {
   try {
     const { propertyCollection } = getCollections();
@@ -489,7 +545,7 @@ app.get("/allProperties/:id", verifyToken, async (req, res) => {
   }
 });
 
-app.get("/allProperties/user/:email",verifyToken, async (req, res) => {
+app.get("/allProperties/user/:email", verifyToken, async (req, res) => {
   try {
     const { propertyCollection } = getCollections();
     const email = req.params.email;
@@ -509,9 +565,14 @@ app.get("/allProperties/user/:email",verifyToken, async (req, res) => {
 
 app.patch("/allProperties/:id", verifyToken, async (req, res) => {
   try {
-    const { propertyCollection } = getCollections();
+    const { propertyCollection, userCollection } = getCollections();
     const id = req.params.id;
     const updatedData = req.body;
+    const userEmail = req.decoded.email;
+
+    // Check if user is admin
+    const user = await userCollection.findOne({ email: userEmail });
+    const isAdmin = user?.role?.includes("admin");
 
     // Convert numeric fields if present
     if (updatedData.details) {
@@ -542,6 +603,40 @@ app.patch("/allProperties/:id", verifyToken, async (req, res) => {
         });
       }
       updatedData.price = priceNum;
+    }
+
+    // Handle isAdminAproved field
+    if (!isAdmin) {
+      // If not admin, set to pending
+      updatedData.isAdminAproved = "pending";
+    } else {
+      // If admin, remove it from updatedData so existing value is preserved
+      delete updatedData.isAdminAproved;
+    }
+    updatedData.agencyId = new ObjectId(updatedData.agencyId);
+
+    if (updatedData.agencyId) {
+      const agencyId = new ObjectId(updatedData.agencyId);
+      const query = { _id: new ObjectId(agencyId) };
+      const agency = await agencyCollection.findOne(query);
+      if (agency) {
+        const updatedAgencyData = {
+          agencyName: updatedData.agency.agencyName,
+          email: updatedData.agencyEmail,
+
+          location: updatedData.agency.location,
+          title: updatedData.agency.title,
+          logoUrl: updatedData.agency.logoUrl,
+        };
+        await agencyCollection.updateOne(
+          { _id: new ObjectId(agencyId) },
+          { $set: updatedAgencyData },
+        );
+      } else {
+        return res.status(400).send({
+          message: "Invalid agencyId. Agency does not exist.",
+        });
+      }
     }
 
     const filter = { _id: new ObjectId(id) };
@@ -588,7 +683,7 @@ app.patch(
         message: error.message || "Database not connected",
       });
     }
-  }
+  },
 );
 app.patch(
   "/properties/pending/:id",
@@ -610,7 +705,7 @@ app.patch(
         message: error.message || "Database not connected",
       });
     }
-  }
+  },
 );
 app.patch(
   "/properties/reject/:id",
@@ -632,13 +727,13 @@ app.patch(
         message: error.message || "Database not connected",
       });
     }
-  }
+  },
 );
 
 app.delete(
   "/properties/delete/:id",
   verifyToken,
-  verifyAdmin,
+
   async (req, res) => {
     try {
       const { propertyCollection } = getCollections();
@@ -652,8 +747,28 @@ app.delete(
         message: error.message || "Failed to delete property",
       });
     }
-  }
+  },
 );
+
+app.patch ('/properties/status/:id', verifyToken, async (req, res) => {
+  try {
+    const { propertyCollection } = getCollections();
+    const id = req.params.id;
+    const { status } = req.body;
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = {
+      $set: { propertyStatus: status },
+    };
+    const result = await propertyCollection.updateOne(filter, updateDoc);
+    res.send(result);
+  } catch (error) {
+    console.error("Error in /properties/status/:id:", error);
+    res.status(500).send({
+      message: error.message || "Database not connected",
+    });
+  }
+});
+
 // ------------- favourites API's  ------------------
 app.post("/favourites", verifyToken, async (req, res) => {
   try {
@@ -705,6 +820,67 @@ app.get("/favourites", verifyToken, async (req, res) => {
   }
 });
 
+// ------------------------appointment API's ----------------------------
+app.post("/appointments", verifyToken, async (req, res) => {
+  // Implementation for creating an appointment
+  const appointment = req.body;
+
+  const propertyId = appointment.propertyId;
+  const query = { propertyId: propertyId, buyerEmail: appointment.buyerEmail };
+  const exists = await appointmentsCollection.findOne(query);
+  if (exists) {
+    return res.send({ exists: "Appointment already exists" });
+  }
+
+  const result = await appointmentsCollection.insertOne(appointment);
+  res.send({
+    insertedId: result.insertedId,
+    message: "Appointment created successfully",
+  });
+});
+
+app.get("/appointments/buyer/:email", verifyToken, async (req, res) => {
+  const email = req.params.email;
+  const query = { buyerEmail: email };
+  const result = await appointmentsCollection.find(query).toArray();
+  res.send(result);
+});
+
+app.delete("/appointments/:id", verifyToken, async (req, res) => {
+  const id = req.params.id;
+  const query = { _id: new ObjectId(id) };
+  const result = await appointmentsCollection.deleteOne(query);
+  res.send(result);
+});
+
+app.get('/appointments/property/:propertyId', verifyToken, async (req, res) => {
+  const propertyId = req.params.propertyId;
+  const query = { propertyId: propertyId };
+  const result = await appointmentsCollection.find(query).toArray();
+  res.send(result);
+}
+);
+
+app.patch("/appointments/status/:id", verifyToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { status, agentMessage } = req.body;
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = {
+      $set: { status: status, agentMessage: agentMessage },
+    };
+    const result = await appointmentsCollection.updateOne(filter, updateDoc);
+    res.send(result);
+  } catch (error) {
+    console.error("Error in /appointments/status/:id:", error);
+    res.status(500).send({
+      message: error.message || "Database not connected",
+    });
+  }
+});
+
+// ------------------------ end of appointment API's ----------------------------
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
@@ -712,7 +888,7 @@ async function run() {
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
+      "Pinged your deployment. You successfully connected to MongoDB!",
     );
 
     userCollection = client.db("propertySellingDB").collection("users");
