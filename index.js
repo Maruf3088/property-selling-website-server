@@ -41,6 +41,10 @@ const appointmentsCollection = client
   .db("propertySellingDB")
   .collection("appointments");
 
+  const reviewsCollection = client
+  .db("propertySellingDB")
+  .collection("reviews");
+
 // ------------- middlewares  ------------------
 const verifyToken = (req, res, next) => {
   if (!req.headers.authorization) {
@@ -197,7 +201,7 @@ app.delete(
 // ------------- agencies API's  ------------------
 
 // GET all agencies
-app.get("/agencies", verifyToken, async (req, res) => {
+app.get("/agencies", async (req, res) => {
   try {
     const { agencyCollection } = getCollections();
     const agencies = await agencyCollection.find({}).toArray();
@@ -880,6 +884,24 @@ app.patch("/appointments/status/:id", verifyToken, async (req, res) => {
 });
 
 // ------------------------ end of appointment API's ----------------------------
+// ------------------------ reviews API's ----------------------------
+
+app.post("/reviews", verifyToken, async (req, res) => {
+  const review = req.body;
+  const result = await reviewsCollection.insertOne(review);
+  res.send({
+    insertedId: result.insertedId,
+    message: "Review added successfully",
+  });
+});
+app.get("/reviews/property/:propertyId", verifyToken, async (req, res) => {
+  const propertyId = req.params.propertyId;
+  const query = { propertyId: propertyId };
+  const result = await reviewsCollection.find(query).toArray();
+  res.send(result);
+});
+
+// ------------------------ end of reviews API's ----------------------------
 
 async function run() {
   try {
